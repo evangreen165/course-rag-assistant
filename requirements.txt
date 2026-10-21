@@ -18,3 +18,14 @@ langchain==0.3.27
 langchain-core==0.3.86
 langchain-community==0.3.31
 langchain-openai==0.2.14
+
+# ВАЖНО: для Python 3.14 на Windows без компилятора C++ (llama-cpp-python, jiter)
+# и Rust (jiter) ставьте пакеты из готовых wheel-файлов, а не из исходников:
+#   pip install https://github.com/Srinadhch07/llama-cpp-python-wheels/releases/download/v0.3.16-cp314-win/llama_cpp_python-0.3.16-cp314-cp314-win_amd64.whl
+#   pip install https://files.pythonhosted.org/packages/8d/96/cdcf54dd0b0341db7d25413229888a346c7130bd20820530905fdb65727b/jiter-0.13.0-cp314-cp314-win_amd64.whl
+# scikit-network (зависимость ragas) не имеет wheel для Python 3.14 и требует компилятор.
+# Он нужен только для графовых метрик, поэтому ragas ставится без зависимостей:
+#   pip install ragas --no-deps
+#   pip install appdirs diskcache instructor langchain langchain-core langchain-community langchain_openai datasets tiktoken pydantic
+# Для ragas 0.4.3 обязателен langchain-community<0.4, иначе import ragas падает
+# (ModuleNotFoundError: langchain_community.chat_models.vertexai).
