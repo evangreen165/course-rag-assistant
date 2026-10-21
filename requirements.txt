@@ -14,3 +14,7 @@ ragas
 datasets
 python-dotenv
 llama-cpp-python
+langchain==0.3.27
+langchain-core==0.3.86
+langchain-community==0.3.31
+langchain-openai==0.2.14
