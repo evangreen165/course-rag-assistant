@@ -6,6 +6,7 @@ import chromadb
 from llama_index.core import SimpleDirectoryReader, StorageContext, VectorStoreIndex
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from llama_index.readers.file import PyMuPDFReader
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -34,6 +35,29 @@ def parse_args():
     return parser.parse_args()
 
 
+def is_garbage(text: str) -> bool:
+    """Определяет, является ли извлечённый текст бинарным мусором."""
+    if not text or not text.strip():
+        return True
+    if "%PDF" in text or "\x00" in text:
+        return True
+    printable = sum(1 for ch in text if ch.isprintable() or ch.isspace())
+    return printable / max(len(text), 1) < 0.8
+
+
+def filter_garbage(documents):
+    """Разделяет документы на корректные и мусорные."""
+    good = []
+    discarded = []
+    for doc in documents:
+        text = doc.get_content() or doc.text or ""
+        if is_garbage(text):
+            discarded.append(doc)
+        else:
+            good.append(doc)
+    return good, discarded
+
+
 def load_documents(args):
     if args.folder:
         input_dir = DATA_DIR / args.folder
@@ -47,9 +71,12 @@ def load_documents(args):
 
     print(f"Читаю документы из: {label}")
     documents = SimpleDirectoryReader(
-        input_dir=input_dir, recursive=True, filename_as_id=True
+        input_dir=input_dir,
+        recursive=True,
+        filename_as_id=True,
+        file_extractor={".pdf": PyMuPDFReader()},
     ).load_data()
-    print(f"Загружено файлов: {len(documents)}")
+    print(f"Загружено документов (страниц): {len(documents)}")
     return documents
 
 
@@ -60,6 +87,20 @@ def main():
     documents = load_documents(args)
     if not documents:
         print("Документы не найдены. Завершение.")
+        sys.exit(0)
+
+    documents, discarded = filter_garbage(documents)
+    all_files = {d.metadata.get("file_name") for d in documents} | {
+        d.metadata.get("file_name") for d in discarded
+    }
+    good_files = {d.metadata.get("file_name") for d in documents}
+    discarded_files = all_files - good_files
+    print(f"Всего файлов: {len(all_files)}")
+    print(f"Успешно прочитано файлов: {len(good_files)}")
+    print(f"Отброшено файлов: {len(discarded_files)}")
+    print(f"Отброшено мусорных документов (страниц): {len(discarded)}")
+    if not documents:
+        print("После фильтрации не осталось корректных документов. Завершение.")
         sys.exit(0)
 
     embed_model = HuggingFaceEmbedding(model_name=EMBED_MODEL, embed_batch_size=32)
@@ -88,8 +129,8 @@ def main():
         show_progress=True,
     )
 
-    print("\n--- Первый чанк для проверки ---")
-    print(nodes[0].text[:500])
+    print("\n--- Первый чанк для проверки (первые 200 символов) ---")
+    print(nodes[0].text[:200])
     print("---")
 
     print(f"\nГотово: {len(nodes)} чанков сохранено в {CHROMA_DIR}")
