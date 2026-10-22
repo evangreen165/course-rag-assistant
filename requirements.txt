@@ -17,7 +17,7 @@ streamlit
 # ragas
 datasets
 python-dotenv
-llama-cpp-python @ https://github.com/Srinadhch07/llama-cpp-python-wheels/releases/download/v0.3.16-cp314-win/llama_cpp_python-0.3.16-cp314-cp314-win_amd64.whl
+llama-cpp-python @ https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.36/llama_cpp_python-0.3.36-py3-none-win_amd64.whl
 jiter==0.13.0
 openai==2.54.0
 langchain==0.3.27
@@ -26,8 +26,9 @@ langchain-community==0.3.31
 
 # ВАЖНО: Python 3.14 на Windows без компилятора C++/Rust.
 # Основные пакеты уже берутся из готовых wheel (включая torch, chromadb, openai, jiter).
-# 1) llama-cpp-python берётся из CPU-wheel (см. строку выше), иначе pip пытается
-#    собрать из исходников и падает: CMake 'nmake' not found.
+# 1) llama-cpp-python берётся из готового CPU-wheel без AVX (см. строку выше):
+#    обычные сборки используют AVX2/AVX-512 и падают с 0xc000001d на CPU без этих
+#    инструкций; сборка из исходников требует CMake (nmake not found).
 # 2) ragas нельзя ставить из этого файла: его зависимость scikit-network не имеет
 #    wheel для cp314 и требует компилятор C++. Установите ragas отдельно:
 #      pip install ragas --no-deps
