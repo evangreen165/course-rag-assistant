@@ -6,3 +6,4 @@ chroma_db/
 *.gguf
 *.zip
 %USERPROFILE%/
+reports/rag_report_*.md

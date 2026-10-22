@@ -3,6 +3,8 @@ llama-index-vector-stores-chroma
 llama-index-embeddings-huggingface
 llama-index-llms-llama-cpp
 llama-index-readers-file
+llama-index-retrievers-bm25
+pystemmer
 chromadb
 sentence-transformers
 pypdf
@@ -37,3 +39,6 @@ langchain-community==0.3.31
 #    Для ragas 0.4.3 обязателен langchain-community<0.4 (иначе import ragas падает:
 #    ModuleNotFoundError: langchain_community.chat_models.vertexai), а langchain-openai
 #    должен быть версии 0.3.x: пин 0.2.14 тянет openai<2 и конфликтует с instructor.
+# 3) pystemmer (зависимость llama-index-retrievers-bm25, пин pystemmer<3) на Python 3.14
+#    не имеет готового wheel и собирается из исходников — на чистом ПК нужен C-компилятор
+#    (MSVC Build Tools).
