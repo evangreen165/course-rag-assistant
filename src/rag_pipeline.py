@@ -35,16 +35,16 @@ MODEL_PATH = PROJECT_ROOT / "modules" / MODEL_FILENAME
 TOP_K = 3
 FUSION_TOP_K = 4
 CONTEXT_WINDOW = 4096
-MAX_NEW_TOKENS = 256
+MAX_NEW_TOKENS = 768
 TEMPERATURE = 0.1
 
-STOP_SEQUENCES = ["<|im_end|>", "\nВопрос:", "\nОтвет:", "Вопрос:"]
+STOP_SEQUENCES = ["<|im_end|>", "\nВопрос:", "\nОтвет:", "Вопрос:", "Original Answer:", "Original Answer"]
 
 SYSTEM_PROMPT = (
     "Ты — ассистент по учебным материалам. Отвечай на вопрос студента, используя "
     "ТОЛЬКО предоставленный контекст. Если в контексте нет ответа, напиши "
     '"В предоставленных материалах нет ответа на этот вопрос". '
-    "Не придумывай ничего от себя."
+    "Не придумывай ничего от себя. Не пиши ничего, кроме ответа."
 )
 
 QA_TEMPLATE = PromptTemplate(
@@ -112,13 +112,24 @@ def load_index(embed_model):
 
 
 def get_all_nodes(chroma_client):
-    """Восстанавливает все ноды из ChromaDB (docstore при загрузке пуст)."""
+    """Восстанавливает все ноды из ChromaDB постранично (docstore при загрузке пуст)."""
     collection = chroma_client.get_collection(COLLECTION_NAME)
-    data = collection.get(include=["documents", "metadatas"])
-    return [
-        TextNode(text=text, metadata=meta or {})
-        for text, meta in zip(data["documents"], data["metadatas"])
-    ]
+    total = collection.count()
+    print(f"Всего документов в коллекции: {total}")
+
+    nodes = []
+    batch_size = 5000
+    for offset in range(0, total, batch_size):
+        data = collection.get(
+            include=["documents", "metadatas"],
+            limit=batch_size,
+            offset=offset,
+        )
+        for text, meta in zip(data["documents"], data["metadatas"]):
+            nodes.append(TextNode(text=text, metadata=meta or {}))
+        print(f"Загружено нод: {len(nodes)}/{total}")
+
+    return nodes
 
 
 def build_hybrid_retriever(index, chroma_client, llm):
