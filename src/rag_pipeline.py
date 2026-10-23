@@ -38,13 +38,15 @@ CONTEXT_WINDOW = 4096
 MAX_NEW_TOKENS = 768
 TEMPERATURE = 0.1
 
-STOP_SEQUENCES = ["<|im_end|>", "\nВопрос:", "\nОтвет:", "Вопрос:", "Original Answer:", "Original Answer"]
+STOP_SEQUENCES = ["<|im_end|>", "\nВопрос:", "The original answer", "The refined answer", "Original Answer:"]
 
 SYSTEM_PROMPT = (
     "Ты — ассистент по учебным материалам. Отвечай на вопрос студента, используя "
-    "ТОЛЬКО предоставленный контекст. Если в контексте нет ответа, напиши "
-    '"В предоставленных материалах нет ответа на этот вопрос". '
-    "Не придумывай ничего от себя. Не пиши ничего, кроме ответа."
+    "ТОЛЬКО предоставленный контекст.\n"
+    "Не пиши никаких вводных слов, не выводи JSON, не копируй метаданные. "
+    'Пиши только чистый текст ответа. Если ответа нет, напиши "В предоставленных '
+    'материалах нет ответа на этот вопрос". '
+    "Отвечай ТОЛЬКО на русском языке. Не пиши никаких комментариев. Просто дай ответ."
 )
 
 QA_TEMPLATE = PromptTemplate(
@@ -84,7 +86,7 @@ def build_llm():
         context_window=CONTEXT_WINDOW,
         max_new_tokens=MAX_NEW_TOKENS,
         temperature=TEMPERATURE,
-        generate_kwargs={"stop": STOP_SEQUENCES},
+        generate_kwargs={"stop": STOP_SEQUENCES, "repeat_penalty": 1.3},
         model_kwargs={"n_gpu_layers": 0, "n_threads": os.cpu_count() or 4},
         completion_to_prompt=identity_prompt,
         verbose=False,
