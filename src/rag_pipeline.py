@@ -29,7 +29,7 @@ REPORTS_DIR = PROJECT_ROOT / "reports"
 
 COLLECTION_NAME = "course_rag"
 EMBED_MODEL = "deepvk/USER2-base"
-MODEL_FILENAME = "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf"
+MODEL_FILENAME = "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
 MODEL_PATH = PROJECT_ROOT / "modules" / MODEL_FILENAME
 
 TOP_K = 3
@@ -38,7 +38,7 @@ CONTEXT_WINDOW = 4096
 MAX_NEW_TOKENS = 768
 TEMPERATURE = 0.1
 
-STOP_SEQUENCES = ["<|im_end|>", "\nВопрос:", "The original answer", "The refined answer", "Original Answer:"]
+STOP_SEQUENCES = ["<|im_end|>", "\nВопрос:", "The original answer", "Original Answer", "The refined answer"]
 
 SYSTEM_PROMPT = (
     "Ты — ассистент по учебным материалам. Отвечай на вопрос студента, используя "
@@ -46,7 +46,7 @@ SYSTEM_PROMPT = (
     "Не пиши никаких вводных слов, не выводи JSON, не копируй метаданные. "
     'Пиши только чистый текст ответа. Если ответа нет, напиши "В предоставленных '
     'материалах нет ответа на этот вопрос". '
-    "Отвечай ТОЛЬКО на русском языке. Не пиши никаких комментариев. Просто дай ответ."
+    "Отвечай ТОЛЬКО на русском языке. Не пиши никаких комментариев, не переводи ответ на английский. Просто дай ответ."
 )
 
 QA_TEMPLATE = PromptTemplate(
@@ -86,7 +86,7 @@ def build_llm():
         context_window=CONTEXT_WINDOW,
         max_new_tokens=MAX_NEW_TOKENS,
         temperature=TEMPERATURE,
-        generate_kwargs={"stop": STOP_SEQUENCES, "repeat_penalty": 1.3},
+        generate_kwargs={"stop": STOP_SEQUENCES, "repeat_penalty": 1.2},
         model_kwargs={"n_gpu_layers": 0, "n_threads": os.cpu_count() or 4},
         completion_to_prompt=identity_prompt,
         verbose=False,

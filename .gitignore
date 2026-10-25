@@ -7,3 +7,5 @@ chroma_db/
 *.zip
 %USERPROFILE%/
 reports/rag_report_*.md
+.env
+.env

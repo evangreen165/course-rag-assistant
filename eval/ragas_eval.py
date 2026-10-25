@@ -1,9 +1,10 @@
 """Оценка качества RAG-пайплайна метриками RAGAS.
 
-Генератор — Qwen 1.5B (llama-index LlamaCPP), судья — Qwen 7B (langchain LlamaCpp).
+Генератор — Qwen 7B (llama-index LlamaCPP), судья — GLM-5.3-Flash (OpenRouter).
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -23,7 +24,8 @@ from llama_index.core import Settings  # noqa: E402
 from llama_index.core.query_engine import RetrieverQueryEngine  # noqa: E402
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding  # noqa: E402
 
-from langchain_community.llms import LlamaCpp  # noqa: E402
+from dotenv import load_dotenv  # noqa: E402
+from langchain_openai import ChatOpenAI  # noqa: E402
 from langchain_community.embeddings import HuggingFaceEmbeddings  # noqa: E402
 
 from datasets import Dataset  # noqa: E402
@@ -40,22 +42,6 @@ from ragas.metrics import (  # noqa: E402
 
 QUESTIONS_PATH = PROJECT_ROOT / "eval" / "test_questions.jsonl"
 RESULTS_CSV = PROJECT_ROOT / "reports" / "ragas_results.csv"
-
-JUDGE_MODEL_FILENAME = "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
-JUDGE_MODEL_PATH = PROJECT_ROOT / "modules" / JUDGE_MODEL_FILENAME
-
-
-def resolve_judge_model_path():
-    if JUDGE_MODEL_PATH.exists():
-        return JUDGE_MODEL_PATH
-    candidates = sorted((PROJECT_ROOT / "modules").glob("*.gguf"))
-    for candidate in candidates:
-        if "1.5b" not in candidate.name.lower():
-            return candidate
-    raise FileNotFoundError(
-        f"Модель-судья не найдена в {PROJECT_ROOT / 'modules'}. "
-        "Положите туда Qwen2.5-7B-Instruct-Q4_K_M.gguf."
-    )
 
 
 def load_questions(path):
@@ -80,18 +66,17 @@ def build_query_engine():
 
 
 def build_judge_llm():
-    model_path = resolve_judge_model_path()
-    return LlamaCpp(
-        model_path=str(model_path),
+    return ChatOpenAI(
+        model="z-ai/glm-5.3-flash",
+        base_url="https://openrouter.ai/api/v1",
+        api_key=os.getenv("OPENROUTER_API_KEY"),
         temperature=0.0,
         max_tokens=1024,
-        n_ctx=8192,
-        n_gpu_layers=0,
-        verbose=False,
     )
 
 
 def main():
+    load_dotenv()
     questions = load_questions(QUESTIONS_PATH)
     if not questions:
         raise SystemExit(f"Нет вопросов в {QUESTIONS_PATH}")
