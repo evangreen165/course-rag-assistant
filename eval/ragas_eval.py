@@ -71,7 +71,7 @@ def build_judge_llm():
         base_url="https://openrouter.ai/api/v1",
         api_key=os.getenv("OPENROUTER_API_KEY"),
         temperature=0.0,
-        max_tokens=1024,
+        max_tokens=4096,
     )
 
 
@@ -118,7 +118,7 @@ def main():
         dataset,
         metrics=[
             Faithfulness(),
-            AnswerRelevancy(),
+            AnswerRelevancy(strictness=1),
             ContextPrecision(),
             ContextRecall(),
         ],

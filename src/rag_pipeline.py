@@ -68,6 +68,15 @@ def identity_prompt(text: str) -> str:
     return text
 
 
+def clean_response(text):
+    import re
+    # Отрезаем всё, что начинается с этих маркеров
+    for marker in ["The original answer", "The refined answer", "Original Answer:", "回答"]:
+        if marker in text:
+            text = text.split(marker)[0]
+    return text.strip()
+
+
 def resolve_model_path():
     if MODEL_PATH.exists():
         return MODEL_PATH
@@ -242,7 +251,7 @@ def main():
             continue
 
         response = query_engine.query(question)
-        answer = str(response).strip()
+        answer = clean_response(response.response)
         sources = extract_sources(response.source_nodes)
 
         print("\n--- Найденные фрагменты ---")
