@@ -49,6 +49,7 @@ DEFAULT_SETTINGS = {
     "api_key": "",
     "free_only": False,
     "max_new_tokens": 1024,
+    "custom_providers": {},
 }
 
 CHAT_QA_TEMPLATE = ChatPromptTemplate(
@@ -74,15 +75,20 @@ def save_json(path, data):
 
 
 @st.cache_data(ttl=600)
-def fetch_openrouter_models():
+def fetch_openrouter_models(api_key=""):
     import requests
 
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     try:
-        resp = requests.get("https://openrouter.ai/api/v1/models", timeout=10)
+        resp = requests.get(
+            "https://openrouter.ai/api/v1/models", timeout=10, headers=headers
+        )
         resp.raise_for_status()
         return sorted(m["id"] for m in resp.json().get("data", []))
     except Exception:
-        return FALLBACK_CLOUD_MODELS
+        return []
 
 
 def list_local_models():
@@ -134,7 +140,7 @@ def make_llm_from_settings(s):
     if provider == "local":
         return get_llm("local", model_name=s.get("model_name"), max_tokens=max_tokens)
     return get_llm(
-        "cloud",
+        provider,
         model_name=s.get("model_name"),
         api_key=s.get("api_key"),
         base_url=s.get("base_url"),
@@ -198,6 +204,8 @@ def render_sidebar():
             api_key = s.get("api_key", "")
             free_only = s.get("free_only", False)
             max_new_tokens = int(s.get("max_new_tokens", 1024))
+            provider_name = ""
+            custom_providers = s.get("custom_providers", {})
 
             if provider == "local":
                 local_models = list_local_models()
@@ -207,14 +215,25 @@ def render_sidebar():
                     default_index = local_models.index(model_name) if model_name in local_models else 0
                     model_name = st.selectbox("Модель", local_models, index=default_index)
             elif provider == "cloud":
-                free_only = st.checkbox("Только бесплатные модели", value=free_only)
-                all_models = fetch_openrouter_models()
+                free_only = st.checkbox("Только бесплатные модели", value=True)
+                all_models = fetch_openrouter_models(api_key)
                 models = [m for m in all_models if not free_only or ":free" in m]
+                if not models:
+                    st.warning("Не удалось загрузить список моделей. Проверьте интернет или API-ключ.")
+                    models = FALLBACK_CLOUD_MODELS
                 default_index = models.index(model_name) if model_name in models else 0
                 model_name = st.selectbox("Модель", models, index=default_index)
                 base_url = "https://openrouter.ai/api/v1"
                 api_key = st.text_input("API-ключ (OpenRouter)", value=api_key, type="password")
             elif provider == "custom":
+                provider_names = list(custom_providers.keys())
+                if provider_names:
+                    selected_provider = st.selectbox("Выбрать сохраненного провайдера", provider_names)
+                    if selected_provider:
+                        base_url = custom_providers[selected_provider].get("base_url", base_url)
+                        model_name = custom_providers[selected_provider].get("model_name", model_name)
+                        api_key = custom_providers[selected_provider].get("api_key", api_key)
+                provider_name = st.text_input("Название провайдера (например, MyLocalAPI)", value="")
                 base_url = st.text_input("Base URL", value=base_url)
                 model_name = st.text_input("Model Name", value=model_name)
                 api_key = st.text_input("API-ключ", value=api_key, type="password")
@@ -222,6 +241,12 @@ def render_sidebar():
             max_new_tokens = st.slider("Макс. токенов (max_new_tokens)", 128, 2048, max_new_tokens)
 
             if st.button("Сохранить настройки"):
+                if provider == "custom" and provider_name.strip():
+                    custom_providers[provider_name.strip()] = {
+                        "base_url": base_url,
+                        "model_name": model_name,
+                        "api_key": api_key,
+                    }
                 st.session_state.settings = {
                     "provider": provider,
                     "model_name": model_name,
@@ -229,6 +254,7 @@ def render_sidebar():
                     "api_key": api_key,
                     "free_only": free_only,
                     "max_new_tokens": max_new_tokens,
+                    "custom_providers": custom_providers,
                 }
                 save_json(SETTINGS_PATH, st.session_state.settings)
                 st.session_state.query_engine = None

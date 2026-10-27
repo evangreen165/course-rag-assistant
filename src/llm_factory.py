@@ -27,7 +27,9 @@ def get_llm(provider, model_name=None, api_key=None, base_url=None, max_tokens=1
             verbose=False,
         )
 
-    if provider == "cloud":
+    if provider in ("cloud", "custom"):
+        if not api_key:
+            raise ValueError("API-ключ не может быть пустым")
         from langchain_openai import ChatOpenAI
 
         return ChatOpenAI(
@@ -36,6 +38,7 @@ def get_llm(provider, model_name=None, api_key=None, base_url=None, max_tokens=1
             api_key=api_key,
             temperature=0.1,
             max_tokens=max_tokens,
+            default_headers={"HTTP-Referer": "http://localhost:8501", "X-Title": "RAG Assistant"},
         )
 
     raise ValueError(f"Неизвестный провайдер: {provider}")
