@@ -79,16 +79,14 @@ def fetch_openrouter_models(api_key=""):
     import requests
 
     headers = {}
+    api_key = (api_key or "").strip()
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-    try:
-        resp = requests.get(
-            "https://openrouter.ai/api/v1/models", timeout=10, headers=headers
-        )
-        resp.raise_for_status()
-        return sorted(m["id"] for m in resp.json().get("data", []))
-    except Exception:
-        return []
+    resp = requests.get(
+        "https://openrouter.ai/api/v1/models", timeout=10, headers=headers
+    )
+    resp.raise_for_status()
+    return sorted(m["id"] for m in resp.json().get("data", []))
 
 
 def list_local_models():
@@ -216,13 +214,20 @@ def render_sidebar():
                     model_name = st.selectbox("Модель", local_models, index=default_index)
             elif provider == "cloud":
                 free_only = st.checkbox("Только бесплатные модели", value=True)
-                all_models = fetch_openrouter_models(api_key)
+                try:
+                    all_models = fetch_openrouter_models(api_key)
+                except Exception as e:
+                    st.error(f"Ошибка загрузки моделей: {e}")
+                    all_models = []
                 models = [m for m in all_models if not free_only or ":free" in m]
                 if not models:
                     st.warning("Не удалось загрузить список моделей. Проверьте интернет или API-ключ.")
-                    models = FALLBACK_CLOUD_MODELS
-                default_index = models.index(model_name) if model_name in models else 0
-                model_name = st.selectbox("Модель", models, index=default_index)
+                    model_name = st.text_input(
+                        "Введите ID модели вручную", value=model_name or "z-ai/glm-5.3-flash"
+                    )
+                else:
+                    default_index = models.index(model_name) if model_name in models else 0
+                    model_name = st.selectbox("Модель", models, index=default_index)
                 base_url = "https://openrouter.ai/api/v1"
                 api_key = st.text_input("API-ключ (OpenRouter)", value=api_key, type="password")
             elif provider == "custom":
@@ -242,16 +247,19 @@ def render_sidebar():
 
             if st.button("Сохранить настройки"):
                 if provider == "custom" and provider_name.strip():
-                    custom_providers[provider_name.strip()] = {
-                        "base_url": base_url,
-                        "model_name": model_name,
-                        "api_key": api_key,
-                    }
+                    if not (base_url.strip() and model_name.strip() and api_key.strip()):
+                        st.error("Заполните Base URL, Model Name и API-ключ для кастомного провайдера.")
+                    else:
+                        custom_providers[provider_name.strip()] = {
+                            "base_url": base_url.strip(),
+                            "model_name": model_name.strip(),
+                            "api_key": api_key.strip(),
+                        }
                 st.session_state.settings = {
                     "provider": provider,
-                    "model_name": model_name,
-                    "base_url": base_url,
-                    "api_key": api_key,
+                    "model_name": model_name.strip(),
+                    "base_url": base_url.strip(),
+                    "api_key": api_key.strip(),
                     "free_only": free_only,
                     "max_new_tokens": max_new_tokens,
                     "custom_providers": custom_providers,
@@ -271,7 +279,8 @@ def render_chat_tab():
     if question and question.strip():
         question = question.strip()
         s = st.session_state.settings
-        if s.get("provider") in ("cloud", "custom") and not s.get("api_key"):
+        provider = s.get("provider", "local")
+        if provider in ("cloud", "custom") and not (s.get("api_key") or "").strip():
             st.error("Ошибка: Введите API-ключ в настройках.")
             st.stop()
 
@@ -279,10 +288,23 @@ def render_chat_tab():
         with st.chat_message("user"):
             st.markdown(question)
 
-        if st.session_state.query_engine is None:
-            with st.spinner("Загружаю модель..."):
+        with st.spinner("Готовлю модель..."):
+            if "retriever" not in st.session_state:
+                st.session_state.retriever = get_retriever()
+            if provider != "local" or st.session_state.query_engine is None:
                 llm = make_llm_from_settings(s)
-                st.session_state.query_engine = build_query_engine(llm)
+                llama_llm = to_llama_index_llm(llm)
+                Settings.llm = llama_llm
+                query_engine = RetrieverQueryEngine.from_args(
+                    retriever=st.session_state.retriever, llm=llama_llm
+                )
+                query_engine.update_prompts(
+                    {
+                        "response_synthesizer:text_qa_template": QA_TEMPLATE,
+                        "response_synthesizer:chat_content_qa_template": CHAT_QA_TEMPLATE,
+                    }
+                )
+                st.session_state.query_engine = query_engine
 
         start = time.time()
         with st.chat_message("assistant"):

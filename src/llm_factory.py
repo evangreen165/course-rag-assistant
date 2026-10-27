@@ -28,8 +28,11 @@ def get_llm(provider, model_name=None, api_key=None, base_url=None, max_tokens=1
         )
 
     if provider in ("cloud", "custom"):
+        api_key = (api_key or "").strip()
         if not api_key:
             raise ValueError("API-ключ не может быть пустым")
+        if provider == "cloud":
+            base_url = "https://openrouter.ai/api/v1"
         from langchain_openai import ChatOpenAI
 
         return ChatOpenAI(
