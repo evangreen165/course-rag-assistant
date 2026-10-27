@@ -1,5 +1,8 @@
+import glob
 import json
+import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -9,6 +12,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 DATA_DIR = PROJECT_ROOT / "ui" / "data"
+MODULES_DIR = PROJECT_ROOT / "modules"
+CORPUS_DIR = PROJECT_ROOT / "data"
 HISTORY_PATH = DATA_DIR / "history.json"
 SETTINGS_PATH = DATA_DIR / "settings.json"
 
@@ -29,7 +34,7 @@ from llama_index.core.query_engine import RetrieverQueryEngine  # noqa: E402
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding  # noqa: E402
 from llama_index.llms.langchain import LangChainLLM  # noqa: E402
 
-CLOUD_MODELS = [
+FALLBACK_CLOUD_MODELS = [
     "z-ai/glm-5.3-flash",
     "meta-llama/llama-3.1-8b-instruct:free",
     "google/gemini-2.0-flash-exp:free",
@@ -39,10 +44,11 @@ CLOUD_MODELS = [
 
 DEFAULT_SETTINGS = {
     "provider": "local",
-    "model_name": "z-ai/glm-5.3-flash",
+    "model_name": "",
     "base_url": "https://openrouter.ai/api/v1",
     "api_key": "",
     "free_only": False,
+    "max_new_tokens": 1024,
 }
 
 CHAT_QA_TEMPLATE = ChatPromptTemplate(
@@ -65,6 +71,32 @@ def load_json(path, default):
 def save_json(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+@st.cache_data(ttl=600)
+def fetch_openrouter_models():
+    import requests
+
+    try:
+        resp = requests.get("https://openrouter.ai/api/v1/models", timeout=10)
+        resp.raise_for_status()
+        return sorted(m["id"] for m in resp.json().get("data", []))
+    except Exception:
+        return FALLBACK_CLOUD_MODELS
+
+
+def list_local_models():
+    return sorted(p.name for p in MODULES_DIR.glob("*.gguf"))
+
+
+def count_tokens(text):
+    try:
+        import tiktoken
+
+        enc = tiktoken.get_encoding("cl100k_base")
+        return len(enc.encode(text))
+    except Exception:
+        return len(text.split())
 
 
 @st.cache_resource(show_spinner=False)
@@ -98,13 +130,15 @@ def build_query_engine(llm):
 
 def make_llm_from_settings(s):
     provider = s.get("provider", "local")
+    max_tokens = int(s.get("max_new_tokens", 1024))
     if provider == "local":
-        return get_llm("local")
+        return get_llm("local", model_name=s.get("model_name"), max_tokens=max_tokens)
     return get_llm(
         "cloud",
         model_name=s.get("model_name"),
         api_key=s.get("api_key"),
         base_url=s.get("base_url"),
+        max_tokens=max_tokens,
     )
 
 
@@ -119,6 +153,8 @@ def init_state():
         st.session_state.settings = load_json(SETTINGS_PATH, DEFAULT_SETTINGS)
     if "query_engine" not in st.session_state:
         st.session_state.query_engine = None
+    if "stats" not in st.session_state:
+        st.session_state.stats = []
 
 
 def persist_current_chat():
@@ -161,10 +197,19 @@ def render_sidebar():
             base_url = s.get("base_url", "")
             api_key = s.get("api_key", "")
             free_only = s.get("free_only", False)
+            max_new_tokens = int(s.get("max_new_tokens", 1024))
 
-            if provider == "cloud":
+            if provider == "local":
+                local_models = list_local_models()
+                if not local_models:
+                    st.warning("В папке modules/ нет .gguf-файлов.")
+                else:
+                    default_index = local_models.index(model_name) if model_name in local_models else 0
+                    model_name = st.selectbox("Модель", local_models, index=default_index)
+            elif provider == "cloud":
                 free_only = st.checkbox("Только бесплатные модели", value=free_only)
-                models = [m for m in CLOUD_MODELS if not free_only or ":free" in m]
+                all_models = fetch_openrouter_models()
+                models = [m for m in all_models if not free_only or ":free" in m]
                 default_index = models.index(model_name) if model_name in models else 0
                 model_name = st.selectbox("Модель", models, index=default_index)
                 base_url = "https://openrouter.ai/api/v1"
@@ -174,6 +219,8 @@ def render_sidebar():
                 model_name = st.text_input("Model Name", value=model_name)
                 api_key = st.text_input("API-ключ", value=api_key, type="password")
 
+            max_new_tokens = st.slider("Макс. токенов (max_new_tokens)", 128, 2048, max_new_tokens)
+
             if st.button("Сохранить настройки"):
                 st.session_state.settings = {
                     "provider": provider,
@@ -181,19 +228,14 @@ def render_sidebar():
                     "base_url": base_url,
                     "api_key": api_key,
                     "free_only": free_only,
+                    "max_new_tokens": max_new_tokens,
                 }
                 save_json(SETTINGS_PATH, st.session_state.settings)
                 st.session_state.query_engine = None
                 st.success("Настройки сохранены")
 
 
-def main():
-    st.set_page_config(page_title="Ассистент по учебным материалам")
-    st.title("📚 Ассистент по учебным материалам")
-
-    init_state()
-    render_sidebar()
-
+def render_chat_tab():
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
@@ -202,21 +244,45 @@ def main():
 
     if question and question.strip():
         question = question.strip()
+        s = st.session_state.settings
+        if s.get("provider") in ("cloud", "custom") and not s.get("api_key"):
+            st.error("Ошибка: Введите API-ключ в настройках.")
+            st.stop()
+
         st.session_state.messages.append({"role": "user", "content": question})
         with st.chat_message("user"):
             st.markdown(question)
 
         if st.session_state.query_engine is None:
             with st.spinner("Загружаю модель..."):
-                llm = make_llm_from_settings(st.session_state.settings)
+                llm = make_llm_from_settings(s)
                 st.session_state.query_engine = build_query_engine(llm)
 
+        start = time.time()
         with st.chat_message("assistant"):
             with st.spinner("Генерирую ответ..."):
                 response = st.session_state.query_engine.query(question)
                 answer = clean_response(response.response)
                 sources = extract_sources(response.source_nodes)
             st.markdown(answer)
+        elapsed = time.time() - start
+
+        model_label = (
+            s.get("model_name") or "Qwen2.5-7B (локально)"
+            if s.get("provider") == "local"
+            else s.get("model_name")
+        )
+        st.session_state.stats.append(
+            {
+                "question": question,
+                "answer": answer,
+                "time": elapsed,
+                "question_tokens": count_tokens(question),
+                "answer_tokens": count_tokens(answer),
+                "model": model_label,
+                "context_size": len(sources),
+            }
+        )
 
         st.session_state.messages.append({"role": "assistant", "content": answer})
 
@@ -228,6 +294,78 @@ def main():
                 st.markdown("Источники не найдены.")
 
         persist_current_chat()
+
+
+def render_stats_tab():
+    st.subheader("📊 Статистика")
+    if not st.session_state.stats:
+        st.info("Пока нет данных. Задайте вопрос в чате.")
+        return
+
+    last = st.session_state.stats[-1]
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Время ответа", f"{last['time']:.2f} с")
+    col2.metric("Токены (вопрос/ответ)", f"{last['question_tokens']}/{last['answer_tokens']}")
+    col3.metric("Модель", last["model"])
+    col4.metric("Размер контекста", f"{last['context_size']} чанков")
+
+    st.divider()
+    st.markdown("### История запросов")
+    for i, entry in enumerate(reversed(st.session_state.stats)):
+        st.markdown(
+            f"**{i + 1}.** `{entry['model']}` — {entry['time']:.2f} с, "
+            f"токены {entry['question_tokens']}/{entry['answer_tokens']} — "
+            f"_{entry['question'][:60]}_"
+        )
+
+
+def render_materials_tab():
+    st.subheader("📚 Материалы")
+
+    if st.button("Переиндексировать корпус"):
+        with st.spinner("Индексация... (на CPU это может занять часы)"):
+            result = subprocess.run(
+                [sys.executable, "src/ingest.py"],
+                capture_output=True,
+                text=True,
+                cwd=str(PROJECT_ROOT),
+            )
+        if result.returncode == 0:
+            st.success("Индексация завершена.")
+        else:
+            st.error("Ошибка индексации.")
+            st.code((result.stdout or "") + (result.stderr or ""))
+
+    uploaded = st.file_uploader("Загрузить новые PDF", type=["pdf"], accept_multiple_files=True)
+    if uploaded:
+        for f in uploaded:
+            dest = CORPUS_DIR / f.name
+            dest.write_bytes(f.getbuffer())
+        st.info("Файлы сохранены в data/. Нажмите «Переиндексировать корпус».")
+
+    st.subheader("Текущие файлы")
+    files = sorted(CORPUS_DIR.rglob("*.pdf"))
+    if not files:
+        st.info("В data/ нет PDF-файлов.")
+    for p in files:
+        size_kb = p.stat().st_size / 1024
+        st.markdown(f"- `{p.relative_to(CORPUS_DIR)}` ({size_kb:.1f} КБ)")
+
+
+def main():
+    st.set_page_config(page_title="Ассистент по учебным материалам")
+    st.title("📚 Ассистент по учебным материалам")
+
+    init_state()
+    render_sidebar()
+
+    tab_chat, tab_stats, tab_materials = st.tabs(["💬 Чат", "📊 Статистика", "📚 Материалы"])
+    with tab_chat:
+        render_chat_tab()
+    with tab_stats:
+        render_stats_tab()
+    with tab_materials:
+        render_materials_tab()
 
 
 if __name__ == "__main__":
