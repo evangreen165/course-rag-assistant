@@ -8,4 +8,5 @@ chroma_db/
 %USERPROFILE%/
 reports/rag_report_*.md
 .env
+ui/data/
 .env
