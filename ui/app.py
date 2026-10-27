@@ -159,6 +159,8 @@ def init_state():
         st.session_state.query_engine = None
     if "stats" not in st.session_state:
         st.session_state.stats = []
+    if "pending_question" not in st.session_state:
+        st.session_state.pending_question = None
 
 
 def persist_current_chat():
@@ -174,23 +176,23 @@ def persist_current_chat():
 def render_sidebar():
     with st.sidebar:
         if st.button("➕ Новый чат"):
-            persist_current_chat()
             st.session_state.current_chat_id = uuid.uuid4().hex
             st.session_state.messages = []
+            st.session_state.pending_question = None
             st.rerun()
 
         st.subheader("История чатов")
-        for chat_id, chat in list(st.session_state.chat_history.items()):
-            if st.button(chat.get("title", "Без названия"), key=f"chat_{chat_id}"):
-                persist_current_chat()
+        for chat_id, chat_data in st.session_state.chat_history.items():
+            if st.button(chat_data.get("title", "Без названия"), key=f"chat_{chat_id}"):
                 st.session_state.current_chat_id = chat_id
-                st.session_state.messages = list(chat.get("messages", []))
+                st.session_state.messages = list(chat_data.get("messages", []))
+                st.session_state.pending_question = None
                 st.rerun()
 
         with st.expander("⚙️ Настройки"):
             s = st.session_state.settings
             provider_labels = {"local": "Локальная", "cloud": "Облачная", "custom": "Кастомная"}
-            provider = st.selectbox(
+            provider = st.radio(
                 "Провайдер",
                 ["local", "cloud", "custom"],
                 index=["local", "cloud", "custom"].index(s.get("provider", "local")),
@@ -269,10 +271,90 @@ def render_sidebar():
                 st.success("Настройки сохранены")
 
 
+def _ensure_chat(title):
+    cid = st.session_state.current_chat_id
+    if not cid:
+        cid = uuid.uuid4().hex
+        st.session_state.current_chat_id = cid
+    if cid not in st.session_state.chat_history:
+        st.session_state.chat_history[cid] = {"title": title, "messages": []}
+    return cid
+
+
+def _sync_chat():
+    cid = st.session_state.current_chat_id
+    if cid and cid in st.session_state.chat_history:
+        st.session_state.chat_history[cid]["messages"] = st.session_state.messages
+        save_json(HISTORY_PATH, st.session_state.chat_history)
+
+
+def _answer(question):
+    s = st.session_state.settings
+    provider = s.get("provider", "local")
+
+    with st.spinner("Готовлю модель..."):
+        if "retriever" not in st.session_state:
+            st.session_state.retriever = get_retriever()
+        if provider != "local" or st.session_state.query_engine is None:
+            llm = make_llm_from_settings(s)
+            llama_llm = to_llama_index_llm(llm)
+            Settings.llm = llama_llm
+            query_engine = RetrieverQueryEngine.from_args(
+                retriever=st.session_state.retriever, llm=llama_llm
+            )
+            query_engine.update_prompts(
+                {
+                    "response_synthesizer:text_qa_template": QA_TEMPLATE,
+                    "response_synthesizer:chat_content_qa_template": CHAT_QA_TEMPLATE,
+                }
+            )
+            st.session_state.query_engine = query_engine
+
+    start = time.time()
+    with st.chat_message("assistant"):
+        with st.spinner("Генерирую ответ..."):
+            response = st.session_state.query_engine.query(question)
+            answer = clean_response(response.response)
+            sources = extract_sources(response.source_nodes)
+        st.markdown(answer)
+    elapsed = time.time() - start
+
+    model_label = s.get("model_name") or (
+        "Qwen2.5-7B (локально)" if provider == "local" else "облачная модель"
+    )
+    st.session_state.stats.append(
+        {
+            "question": question,
+            "answer": answer,
+            "time": elapsed,
+            "question_tokens": count_tokens(question),
+            "answer_tokens": count_tokens(answer),
+            "model": model_label,
+            "context_size": len(sources),
+        }
+    )
+
+    st.session_state.messages.append({"role": "assistant", "content": answer})
+    _sync_chat()
+
+    with st.expander("Источники"):
+        if sources:
+            for name in sources:
+                st.markdown(f"- {name}")
+        else:
+            st.markdown("Источники не найдены.")
+
+
 def render_chat_tab():
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
+
+    pending = st.session_state.get("pending_question")
+    if pending:
+        st.session_state.pending_question = None
+        _answer(pending)
+        return
 
     question = st.chat_input("Задайте вопрос по учебным материалам")
 
@@ -284,64 +366,12 @@ def render_chat_tab():
             st.error("Ошибка: Введите API-ключ в настройках.")
             st.stop()
 
+        title = question[:20] + ("..." if len(question) > 20 else "")
+        _ensure_chat(title)
         st.session_state.messages.append({"role": "user", "content": question})
-        with st.chat_message("user"):
-            st.markdown(question)
-
-        with st.spinner("Готовлю модель..."):
-            if "retriever" not in st.session_state:
-                st.session_state.retriever = get_retriever()
-            if provider != "local" or st.session_state.query_engine is None:
-                llm = make_llm_from_settings(s)
-                llama_llm = to_llama_index_llm(llm)
-                Settings.llm = llama_llm
-                query_engine = RetrieverQueryEngine.from_args(
-                    retriever=st.session_state.retriever, llm=llama_llm
-                )
-                query_engine.update_prompts(
-                    {
-                        "response_synthesizer:text_qa_template": QA_TEMPLATE,
-                        "response_synthesizer:chat_content_qa_template": CHAT_QA_TEMPLATE,
-                    }
-                )
-                st.session_state.query_engine = query_engine
-
-        start = time.time()
-        with st.chat_message("assistant"):
-            with st.spinner("Генерирую ответ..."):
-                response = st.session_state.query_engine.query(question)
-                answer = clean_response(response.response)
-                sources = extract_sources(response.source_nodes)
-            st.markdown(answer)
-        elapsed = time.time() - start
-
-        model_label = (
-            s.get("model_name") or "Qwen2.5-7B (локально)"
-            if s.get("provider") == "local"
-            else s.get("model_name")
-        )
-        st.session_state.stats.append(
-            {
-                "question": question,
-                "answer": answer,
-                "time": elapsed,
-                "question_tokens": count_tokens(question),
-                "answer_tokens": count_tokens(answer),
-                "model": model_label,
-                "context_size": len(sources),
-            }
-        )
-
-        st.session_state.messages.append({"role": "assistant", "content": answer})
-
-        with st.expander("Источники"):
-            if sources:
-                for name in sources:
-                    st.markdown(f"- {name}")
-            else:
-                st.markdown("Источники не найдены.")
-
-        persist_current_chat()
+        _sync_chat()
+        st.session_state.pending_question = question
+        st.rerun()
 
 
 def render_stats_tab():
